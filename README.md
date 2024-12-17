@@ -1,6 +1,7 @@
 # Project Process Prediction: Unified framework for sequential DL model comparisons
 
-Original Paper: https://arxiv.org/abs/2110.10225v1
+- Original Paper: https://arxiv.org/abs/2110.10225v1
+- Task: https://moodle.hu-berlin.de/pluginfile.php/6441682/mod_resource/content/1/ProjectInstructions.pdf
 
 ## Team Members
 
