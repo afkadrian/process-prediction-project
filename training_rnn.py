@@ -14,39 +14,6 @@ import copy
 import utils
 
 
-def seq_ae_predict(seq_ae_teacher_forcing_ratio, model, model_input_x, model_input_y, temperature=1.0, top_k=None, sample=False):
-    prediction = ()
-    use_teacher_forcing = True if random.random() < seq_ae_teacher_forcing_ratio else False
-
-    if use_teacher_forcing:
-        prediction = model(model_input_x, model_input_y)
-    else:
-        # TODO prepare it for activity labels only
-        # Semi open loop:
-        encoder_hidden = model.encoder(model_input_x)[1]
-        decoder_hidden = encoder_hidden
-        input_sos = (model_input_y[0][:, 0, :].unsqueeze(-1), model_input_y[1][:, 0, :].unsqueeze(-1))
-        input_position = input_sos
-
-        for i in range(model_input_y[0].size(1)):
-            inter_position, decoder_hidden = model.decoder.cell(model.decoder.value_embedding(input_position), decoder_hidden)
-            output_position = model.decoder.readout(inter_position)
-
-            if i == 0:
-                prediction = output_position
-            elif i > 0:
-                a_p = torch.cat((prediction[0], output_position[0]), dim=1)
-                t_p = torch.cat((prediction[1], output_position[1]), dim=1)
-                prediction = (a_p, t_p)
-
-            a_i = output_position[0].detach()
-            t_i = output_position[1].detach()
-
-            input_position = (utils.generate(a_i, temperature=temperature, top_k=top_k, sample=sample), t_i)
-
-    return prediction
-
-
 # Training loop for encoder-decoder models:
 def iterate_over_prefixes(log_with_prefixes,
                           batch_size=128,
