@@ -3,3 +3,4 @@ torch
 tqdm
 pm4py
 pandas
+scikit-learn
