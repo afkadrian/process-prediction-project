@@ -27,11 +27,3 @@ def generate(a_i, temperature=1.0, top_k=None, sample=False):
     else:
         _, ix = torch.topk(probs, k=1, dim=-1)
     return ix
-
-
-# Credits to Farbod https://github.com/farbodtaymouri/MLMME/blob/main/network.py
-def label_smooth_gumbel_sampling(t):
-    t[t == 1] = 0.9
-    t[t == 0] = 0.1 / (t.size(2) - 1)
-    t = F.gumbel_softmax(t, dim=-1, tau=0.001)
-    return t
