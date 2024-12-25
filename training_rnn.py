@@ -144,6 +144,194 @@ def iterate_over_prefixes(log_with_prefixes,
         else:
             return (summa_categorical_loss.item() / steps, )
 
+def train_rnn(args, log, log_name, dt_object):
+
+    processed_log = data_preprocessing.Training.create_structured_log(log, log_name=log_name)
+
+    path = os.path.join('results', 'rnn', str(processed_log['id']))
+    if not os.path.exists(path): os.makedirs(path)
+
+    vars(args)['dataset'] = str(processed_log['id'])
+
+    if os.path.isdir(os.path.join('split_logs', log_name)):
+        for file_name in sorted(os.listdir(os.path.join('split_logs', log_name))):
+            if file_name.startswith('split_log_'):
+                split_log_file_name = os.path.join('split_logs', log_name, file_name)
+                with open(split_log_file_name) as f_in:
+                    split_log = json.load(f_in)
+                print(split_log_file_name + ' is used as common data')
+        del processed_log
+    else:
+        split_log = data_preprocessing.Training.create_split_log(processed_log, validation_ratio=args.validation_split)
+
+    with open(os.path.join(path, 'split_log_' + dt_object.strftime("%Y%m%d%H%M") + '.json'), 'w') as f:
+        json.dump(split_log, f)
+
+    log_with_prefixes = data_preprocessing.create_prefixes(split_log,
+                                                            min_prefix=2,
+                                                            create_tensors=True,
+                                                            add_special_tokens=True,
+                                                            pad_sequences=True,
+                                                            pad_token=args.pad_token,
+                                                            to_wrap_into_torch_dataset=args.to_wrap_into_torch_dataset,
+                                                            training_batch_size=args.training_batch_size,
+                                                            validation_batch_size=args.validation_batch_size,
+                                                            single_position_target=args.single_position_target)
+
+    # [EOS], [SOS], [PAD]
+    nb_special_tokens = 3
+    attributes_meta = {0: {'nb_special_tokens': nb_special_tokens, 'vocabulary_size': log_with_prefixes['vocabulary_size']},
+                        1: {'min_value': 0.0, 'max_value': 1.0}}
+
+    vars(args)['sos_token'] = log_with_prefixes['sos_token']
+    vars(args)['eos_token'] = log_with_prefixes['eos_token']
+    vars(args)['nb_special_tokens'] = nb_special_tokens
+    vars(args)['vocabulary_size'] = log_with_prefixes['vocabulary_size']
+    vars(args)['longest_trace_length'] = log_with_prefixes['longest_trace_length']
+
+    # All traces are longer by one position due to the closing [EOS]:
+    max_length = log_with_prefixes['longest_trace_length'] + 1
+    vars(args)['max_length'] = max_length
+
+    with open(os.path.join(path, 'experiment_parameters.json'), 'a') as fp:
+        json.dump(vars(args), fp)
+        fp.write('\n')
+
+    model = models.SequentialDecoder(hidden_size=args.hidden_dim,
+                                        num_layers=args.n_layers,
+                                        dropout_prob=args.dropout_prob,
+                                        vocab_size=attributes_meta[0]['vocabulary_size'],
+                                        attributes_meta=attributes_meta,
+                                        time_attribute_concatenated=args.time_attribute_concatenated,
+                                        pad_token=args.pad_token,
+                                        nb_special_tokens=attributes_meta[0]['nb_special_tokens'],
+                                        architecture='Niek')
+
+    if args.device == 'GPU':
+        model.cuda()
+
+    categorical_criterion = nn.CrossEntropyLoss()
+    regression_criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(),
+                                    lr=args.training_learning_rate,
+                                    weight_decay=args.training_gaussian_process)
+
+    training_log_filename = "training_figures_" + dt_object.strftime("%Y%m%d%H%M") + ".csv"
+    with open(os.path.join(path, training_log_filename), "a") as myfile:
+        myfile.write('datetime'
+                        ',epoch'
+                        ',training_loss_activity'
+                        ',training_loss_time'
+                        ',training_loss'
+                        ',validation_loss_activity'
+                        ',validation_loss_time'
+                        ',validation_loss'
+                        ',elapsed_seconds\n')
+
+    # not saving all version of model:
+    min_loss_threshold = args.save_criterion_threshold
+
+    if not os.path.exists(os.path.join(path, 'checkpoints')): os.makedirs(os.path.join(path, 'checkpoints'))
+
+    model_to_save = {}
+    total_validation_losses = []
+
+    for e in range(args.nb_epoch):
+        if not e % 10:
+            print('training epoch ' + str(e) + '/' + str(args.nb_epoch) + ' of ' + str(log_with_prefixes['id']))
+
+        model.train()
+        dt_object_training_start = datetime.datetime.now()
+
+        training_loss = iterate_over_prefixes(log_with_prefixes=log_with_prefixes,
+                                                batch_size=args.training_batch_size,
+                                                model=model,
+                                                device=args.device,
+                                                categorical_criterion=categorical_criterion,
+                                                regression_criterion=regression_criterion,
+                                                subset='training',
+                                                optimizer=optimizer,
+                                                lagrange_a=args.lagrange_a,
+                                                to_wrap_into_torch_dataset=args.to_wrap_into_torch_dataset)
+
+        dt_object_training_end = datetime.datetime.now()
+
+        training_duration = (dt_object_training_end - dt_object_training_start).total_seconds()
+
+        model.eval()
+        with torch.no_grad():
+            validation_loss = iterate_over_prefixes(log_with_prefixes=log_with_prefixes,
+                                                    batch_size=args.validation_batch_size,
+                                                    model=model,
+                                                    device=args.device,
+                                                    categorical_criterion=categorical_criterion,
+                                                    regression_criterion=regression_criterion,
+                                                    subset='validation',
+                                                    to_wrap_into_torch_dataset=args.to_wrap_into_torch_dataset)
+
+        # an arbritary value:
+        validation_loss_fix_masks = (99, 99)
+        total_validation_loss_fix_masks = 99
+
+        if len(validation_loss) > 1:
+            total_validation_loss = validation_loss[0] + args.lagrange_a * validation_loss[1]
+            with open(os.path.join(path, training_log_filename), "a") as myfile:
+                myfile.write(dt_object.strftime("%Y%m%d%H%M")
+                                + ',' + str(e)
+                                + ',' + "{:.4f}".format(training_loss[0])
+                                + ',' + "{:.4f}".format(training_loss[1])
+                                + ',' + "{:.4f}".format(training_loss[0] + args.lagrange_a * training_loss[1])
+                                + ',' + "{:.4f}".format(validation_loss[0])
+                                + ',' + "{:.4f}".format(validation_loss[1])
+                                + ',' + "{:.4f}".format(total_validation_loss)
+                                + ',' + "{:.3f}".format(training_duration)
+                                + ',' + "{:.4f}".format(validation_loss_fix_masks[0])
+                                + ',' + "{:.4f}".format(validation_loss_fix_masks[1])
+                                + ',' + "{:.4f}".format(total_validation_loss_fix_masks)
+                                + '\n')
+        else:
+            total_validation_loss = validation_loss[0]
+            with open(os.path.join(path, training_log_filename), "a") as myfile:
+                myfile.write(dt_object.strftime("%Y%m%d%H%M")
+                                + ',' + str(e)
+                                + ',' + "{:.4f}".format(training_loss[0])
+                                + ',' + 'NA'
+                                + ',' + "{:.4f}".format(training_loss[0])
+                                + ',' + "{:.4f}".format(validation_loss[0])
+                                + ',' + 'NA'
+                                + ',' + "{:.4f}".format(total_validation_loss)
+                                + ',' + "{:.3f}".format(training_duration)
+                                + ',' + "{:.4f}".format(validation_loss_fix_masks[0])
+                                + ',' + "{:.4f}".format(validation_loss_fix_masks[1])
+                                + ',' + "{:.4f}".format(total_validation_loss_fix_masks)
+                                + '\n')
+
+        total_validation_losses.append(total_validation_loss)
+
+        if args.early_stopping:
+            early_stopping_var = 50
+            if len(total_validation_losses) > early_stopping_var:
+                if np.all(np.array(total_validation_losses)[-(early_stopping_var - 1):] >
+                            np.array(total_validation_losses)[-early_stopping_var]):
+                    print("early stopping")
+                    break
+
+        if total_validation_loss < min_loss_threshold:
+            model_to_save['model_state_dict'] = copy.deepcopy(model.state_dict())
+            model_to_save['optimizer_state_dict'] = copy.deepcopy(optimizer.state_dict())
+            model_to_save['loss'] = copy.deepcopy(total_validation_loss)
+            model_to_save['epoch'] = copy.deepcopy(e)
+            model_to_save['total_validation_loss'] = copy.deepcopy(total_validation_loss)
+            min_loss_threshold = total_validation_loss
+
+    if len(model_to_save) > 0:
+        checkpoint_name = 'model-' + "{:.4f}".format(model_to_save['total_validation_loss']) + '_epoch-' + str(model_to_save['epoch']) + '_date-' + dt_object.strftime("%Y%m%d%H%M") + '.pt'
+
+        torch.save({
+            'model_state_dict': model_to_save['model_state_dict'],
+            'optimizer_state_dict': model_to_save['optimizer_state_dict'],
+            'loss': model_to_save['loss'],
+        }, os.path.join(path, 'checkpoints', checkpoint_name))
 
 def main(args, dt_object):
     if not args.random:
@@ -164,197 +352,13 @@ def main(args, dt_object):
     # data_preprocessing.Visualization.download_logs(logs_meta, logs_dir)
     distributions, logs = data_preprocessing.create_distributions(logs_dir)
 
+    
+    if args.device == 'GPU':
+        print('total GPU memory: ' + str(torch.cuda.get_device_properties(device=args.gpu).total_memory))
+        print('allocated GPU memory: ' + str(torch.cuda.memory_allocated(device=args.gpu)))
+    
     for log_name in logs:
-        if args.device == 'GPU':
-            print('total GPU memory: ' + str(torch.cuda.get_device_properties(device=args.gpu).total_memory))
-            print('allocated GPU memory: ' + str(torch.cuda.memory_allocated(device=args.gpu)))
-
-        processed_log = data_preprocessing.Training.create_structured_log(logs[log_name], log_name=log_name)
-
-        path = os.path.join('results', 'rnn', str(processed_log['id']))
-        if not os.path.exists(path): os.makedirs(path)
-
-        vars(args)['dataset'] = str(processed_log['id'])
-
-        if os.path.isdir(os.path.join('split_logs', log_name)):
-            for file_name in sorted(os.listdir(os.path.join('split_logs', log_name))):
-                if file_name.startswith('split_log_'):
-                    split_log_file_name = os.path.join('split_logs', log_name, file_name)
-                    with open(split_log_file_name) as f_in:
-                        split_log = json.load(f_in)
-                    print(split_log_file_name + ' is used as common data')
-            del processed_log
-        else:
-            split_log = data_preprocessing.Training.create_split_log(processed_log, validation_ratio=args.validation_split)
-
-        with open(os.path.join(path, 'split_log_' + dt_object.strftime("%Y%m%d%H%M") + '.json'), 'w') as f:
-            json.dump(split_log, f)
-
-        log_with_prefixes = data_preprocessing.create_prefixes(split_log,
-                                                               min_prefix=2,
-                                                               create_tensors=True,
-                                                               add_special_tokens=True,
-                                                               pad_sequences=True,
-                                                               pad_token=args.pad_token,
-                                                               to_wrap_into_torch_dataset=args.to_wrap_into_torch_dataset,
-                                                               training_batch_size=args.training_batch_size,
-                                                               validation_batch_size=args.validation_batch_size,
-                                                               single_position_target=args.single_position_target)
-
-        # [EOS], [SOS], [PAD]
-        nb_special_tokens = 3
-        attributes_meta = {0: {'nb_special_tokens': nb_special_tokens, 'vocabulary_size': log_with_prefixes['vocabulary_size']},
-                           1: {'min_value': 0.0, 'max_value': 1.0}}
-
-        vars(args)['sos_token'] = log_with_prefixes['sos_token']
-        vars(args)['eos_token'] = log_with_prefixes['eos_token']
-        vars(args)['nb_special_tokens'] = nb_special_tokens
-        vars(args)['vocabulary_size'] = log_with_prefixes['vocabulary_size']
-        vars(args)['longest_trace_length'] = log_with_prefixes['longest_trace_length']
-
-        # All traces are longer by one position due to the closing [EOS]:
-        max_length = log_with_prefixes['longest_trace_length'] + 1
-        vars(args)['max_length'] = max_length
-
-        with open(os.path.join(path, 'experiment_parameters.json'), 'a') as fp:
-            json.dump(vars(args), fp)
-            fp.write('\n')
-
-        model = models.SequentialDecoder(hidden_size=args.hidden_dim,
-                                         num_layers=args.n_layers,
-                                         dropout_prob=args.dropout_prob,
-                                         vocab_size=attributes_meta[0]['vocabulary_size'],
-                                         attributes_meta=attributes_meta,
-                                         time_attribute_concatenated=args.time_attribute_concatenated,
-                                         pad_token=args.pad_token,
-                                         nb_special_tokens=attributes_meta[0]['nb_special_tokens'],
-                                         architecture='Niek')
-
-        if args.device == 'GPU':
-            model.cuda()
-
-        categorical_criterion = nn.CrossEntropyLoss()
-        regression_criterion = nn.MSELoss()
-        optimizer = torch.optim.Adam(model.parameters(),
-                                     lr=args.training_learning_rate,
-                                     weight_decay=args.training_gaussian_process)
-
-        training_log_filename = "training_figures_" + dt_object.strftime("%Y%m%d%H%M") + ".csv"
-        with open(os.path.join(path, training_log_filename), "a") as myfile:
-            myfile.write('datetime'
-                         ',epoch'
-                         ',training_loss_activity'
-                         ',training_loss_time'
-                         ',training_loss'
-                         ',validation_loss_activity'
-                         ',validation_loss_time'
-                         ',validation_loss'
-                         ',elapsed_seconds\n')
-
-        # not saving all version of model:
-        min_loss_threshold = args.save_criterion_threshold
-
-        if not os.path.exists(os.path.join(path, 'checkpoints')): os.makedirs(os.path.join(path, 'checkpoints'))
-
-        model_to_save = {}
-        total_validation_losses = []
-
-        for e in range(args.nb_epoch):
-            if not e % 10:
-                print('training epoch ' + str(e) + '/' + str(args.nb_epoch) + ' of ' + str(log_with_prefixes['id']))
-
-            model.train()
-            dt_object_training_start = datetime.datetime.now()
-
-            training_loss = iterate_over_prefixes(log_with_prefixes=log_with_prefixes,
-                                                  batch_size=args.training_batch_size,
-                                                  model=model,
-                                                  device=args.device,
-                                                  categorical_criterion=categorical_criterion,
-                                                  regression_criterion=regression_criterion,
-                                                  subset='training',
-                                                  optimizer=optimizer,
-                                                  lagrange_a=args.lagrange_a,
-                                                  to_wrap_into_torch_dataset=args.to_wrap_into_torch_dataset)
-
-            dt_object_training_end = datetime.datetime.now()
-
-            training_duration = (dt_object_training_end - dt_object_training_start).total_seconds()
-
-            model.eval()
-            with torch.no_grad():
-                validation_loss = iterate_over_prefixes(log_with_prefixes=log_with_prefixes,
-                                                        batch_size=args.validation_batch_size,
-                                                        model=model,
-                                                        device=args.device,
-                                                        categorical_criterion=categorical_criterion,
-                                                        regression_criterion=regression_criterion,
-                                                        subset='validation',
-                                                        to_wrap_into_torch_dataset=args.to_wrap_into_torch_dataset)
-
-            # an arbritary value:
-            validation_loss_fix_masks = (99, 99)
-            total_validation_loss_fix_masks = 99
-
-            if len(validation_loss) > 1:
-                total_validation_loss = validation_loss[0] + args.lagrange_a * validation_loss[1]
-                with open(os.path.join(path, training_log_filename), "a") as myfile:
-                    myfile.write(dt_object.strftime("%Y%m%d%H%M")
-                                 + ',' + str(e)
-                                 + ',' + "{:.4f}".format(training_loss[0])
-                                 + ',' + "{:.4f}".format(training_loss[1])
-                                 + ',' + "{:.4f}".format(training_loss[0] + args.lagrange_a * training_loss[1])
-                                 + ',' + "{:.4f}".format(validation_loss[0])
-                                 + ',' + "{:.4f}".format(validation_loss[1])
-                                 + ',' + "{:.4f}".format(total_validation_loss)
-                                 + ',' + "{:.3f}".format(training_duration)
-                                 + ',' + "{:.4f}".format(validation_loss_fix_masks[0])
-                                 + ',' + "{:.4f}".format(validation_loss_fix_masks[1])
-                                 + ',' + "{:.4f}".format(total_validation_loss_fix_masks)
-                                 + '\n')
-            else:
-                total_validation_loss = validation_loss[0]
-                with open(os.path.join(path, training_log_filename), "a") as myfile:
-                    myfile.write(dt_object.strftime("%Y%m%d%H%M")
-                                 + ',' + str(e)
-                                 + ',' + "{:.4f}".format(training_loss[0])
-                                 + ',' + 'NA'
-                                 + ',' + "{:.4f}".format(training_loss[0])
-                                 + ',' + "{:.4f}".format(validation_loss[0])
-                                 + ',' + 'NA'
-                                 + ',' + "{:.4f}".format(total_validation_loss)
-                                 + ',' + "{:.3f}".format(training_duration)
-                                 + ',' + "{:.4f}".format(validation_loss_fix_masks[0])
-                                 + ',' + "{:.4f}".format(validation_loss_fix_masks[1])
-                                 + ',' + "{:.4f}".format(total_validation_loss_fix_masks)
-                                 + '\n')
-
-            total_validation_losses.append(total_validation_loss)
-
-            if args.early_stopping:
-                early_stopping_var = 50
-                if len(total_validation_losses) > early_stopping_var:
-                    if np.all(np.array(total_validation_losses)[-(early_stopping_var - 1):] >
-                              np.array(total_validation_losses)[-early_stopping_var]):
-                        print("early stopping")
-                        break
-
-            if total_validation_loss < min_loss_threshold:
-                model_to_save['model_state_dict'] = copy.deepcopy(model.state_dict())
-                model_to_save['optimizer_state_dict'] = copy.deepcopy(optimizer.state_dict())
-                model_to_save['loss'] = copy.deepcopy(total_validation_loss)
-                model_to_save['epoch'] = copy.deepcopy(e)
-                model_to_save['total_validation_loss'] = copy.deepcopy(total_validation_loss)
-                min_loss_threshold = total_validation_loss
-
-        if len(model_to_save) > 0:
-            checkpoint_name = 'model-' + "{:.4f}".format(model_to_save['total_validation_loss']) + '_epoch-' + str(model_to_save['epoch']) + '_date-' + dt_object.strftime("%Y%m%d%H%M") + '.pt'
-
-            torch.save({
-                'model_state_dict': model_to_save['model_state_dict'],
-                'optimizer_state_dict': model_to_save['optimizer_state_dict'],
-                'loss': model_to_save['loss'],
-            }, os.path.join(path, 'checkpoints', checkpoint_name))
+        train_rnn(args, logs[log_name], log_name, dt_object)
 
 
 if __name__ == '__main__':
