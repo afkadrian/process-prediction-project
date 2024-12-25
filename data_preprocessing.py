@@ -414,30 +414,6 @@ def create_distributions(logs_dir, log_name=None):
     return dict(sorted(distributions.items())), dict(sorted(logs.items()))
 
 
-def create_length_distribution_figure(distributions):
-    b = 3  # number of columns
-    a = math.ceil(len(distributions) / b)  # number of rows
-    c = 1  # initialize plot counter
-
-    distributions = dict(sorted(distributions.items()))
-
-    fig = plt.figure(figsize=(18, 12))
-    fig.tight_layout()
-
-    for log_name, log_distribution in distributions.items():
-        plt.subplot(a, b, c)
-        plt.title('{}'.format(log_name))
-        plt.xlabel('trace length')
-        plt.ylabel('# traces')
-        plt.bar(log_distribution.keys(), log_distribution.values())
-        fig.gca().get_xaxis().set_major_locator(plt.MaxNLocator(integer=True))
-        c = c + 1
-
-    fig.subplots_adjust(wspace=0.2)
-    fig.subplots_adjust(hspace=0.6)
-    fig.savefig('case_legth_statistics.png', dpi=fig.dpi)
-
-
 def create_count_figure(counts):
     b = 3  # number of columns
     a = math.ceil(len(counts) / b)  # number of rows
