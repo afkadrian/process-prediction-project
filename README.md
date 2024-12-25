@@ -13,3 +13,11 @@
 
 - Presentation: https://docs.google.com/presentation/d/1zwoWt3s0DLO7dLLgZ32y4eB7C6agWLoB2lFTGqw8NBQ/edit#slide=id.p
 - Report: https://latex.hu-berlin.de/project/67616832e2dbb4e0fe375cc0
+
+## Code Structure
+
+Scripts with main functions:
+
+1. `training_<xxx>.py`: Training of the models
+2. `evaluation.py`: Inference and evaluation of the models. Calculates DLS and MAE results.
+3. `all_models_dls.py` / `all_models_mae_denormalised.py`: Visualize the results of the models.
