@@ -458,7 +458,7 @@ def evaluate_generation(datetime, model_type):
             predictions = json.load(f_in)
 
         # in-place time attribute denormalisation:
-        data_preprocessing.denormalise(predictions)
+        data_preprocessing.Evaluation.denormalise(predictions)
 
         results = {model_type: {}}
         results[model_type][predictions['log']] = {}

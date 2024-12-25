@@ -16,21 +16,6 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 
-def key_string_to_int(d):
-    return {int(k): v for k, v in d.items()}
-
-
-def create_split_log(log, validation_ratio=0.2):
-    nb_training = math.ceil(len(log['traces']) * (1 - validation_ratio))
-    random.shuffle(log['traces'])
-
-    augmented_log = deepcopy(log)
-    del augmented_log['traces']
-    augmented_log['training_traces'] = log['traces'][:nb_training]
-    augmented_log['validation_traces'] = log['traces'][nb_training:]
-
-    return augmented_log
-
 
 # TODO having a parameter & del training prefixes during eval
 # Prefixes for the sequential encoder-decoder models
@@ -256,122 +241,6 @@ def create_prefixes(log,
     return augmented_log
 
 
-def create_structured_log(log, log_name=None, to_normalise=True):
-    processed_log = {'id': str(log_name),
-                     'longest_trace_length': int(0),
-                     'traces': [],
-                     'activity_label_to_category_index': {},
-                     'category_index_to_activity_label': {},
-                     'nb_traces': len(log),
-                     'max_time_value': float("-inf"),
-                     'min_time_value': float("inf"),
-                     'vocabulary_size': None}
-
-    # It will create categories starting form 1 on
-    # Category 0 is always reserved for [PAD]
-    # Additional special tokens will be added later
-    activity_index = 0
-
-    for trace in log:
-        processed_trace = {'id': trace.attributes['concept:name'], 'activities': [], 'times': []}
-        last_datetime = None
-
-        if len(trace) > processed_log['longest_trace_length']: processed_log['longest_trace_length'] = len(trace)
-
-        for event in trace:
-            if event['concept:name'] in processed_log['activity_label_to_category_index'].keys():
-                processed_trace['activities'].append(
-                    processed_log['activity_label_to_category_index'][event['concept:name']])
-            else:
-                activity_index += 1
-                processed_log['activity_label_to_category_index'][event['concept:name']] = activity_index
-                processed_log['category_index_to_activity_label'][activity_index] = event['concept:name']
-                processed_trace['activities'].append(
-                    processed_log['activity_label_to_category_index'][event['concept:name']])
-
-            if last_datetime is not None:
-                diff = (event['time:timestamp'] - last_datetime).total_seconds() # decided to be on a second scale
-                processed_trace['times'].append(diff)
-                last_datetime = event['time:timestamp']
-
-                if processed_log['max_time_value'] < diff:
-                    processed_log['max_time_value'] = diff
-                if processed_log['min_time_value'] > diff:
-                    processed_log['min_time_value'] = diff
-            else:
-                init_value = 0.0
-                if processed_log['max_time_value'] < init_value:
-                    processed_log['max_time_value'] = init_value
-                if processed_log['min_time_value'] > init_value:
-                    processed_log['min_time_value'] = init_value
-                processed_trace['times'].append(init_value)
-                last_datetime = event['time:timestamp']
-
-        processed_log['traces'].append(processed_trace)
-    processed_log['vocabulary_size'] = activity_index
-
-    if to_normalise:
-        # in-place normalisation:
-        normalise(processed_log)
-
-    return processed_log
-
-
-# in-place normalisation:
-def normalise(processed_log):
-    for trace in processed_log['traces']:
-        normalized_times = []
-        for time in trace['times']:
-            normalized_times.append((time - processed_log['min_time_value']) / (
-                    processed_log['max_time_value'] - processed_log['min_time_value']))
-        trace['times'] = normalized_times
-
-
-# in-place denormalisation:
-def denormalise(prediction, in_days=True):
-    # in-place denormalisation:
-    def denorm(s):
-        if in_days:
-            return (float(s) * (float(prediction['max_time_value']) - float(prediction['min_time_value'])) + float(prediction['min_time_value'])) / 60 / 60 / 24
-        else:
-            return float(s) * (float(prediction['max_time_value']) - float(prediction['min_time_value'])) + float(prediction['min_time_value'])
-
-    def rec_walk_list(l):
-        for index, item in enumerate(l):
-            if isinstance(l[index], list): # is a list
-                rec_walk_list(l[index])
-            else: # is a scalar
-                l[index] = denorm(l[index])
-
-    def rec_walk_dict(d):
-        for k, v in d.items():
-            if isinstance(v, dict):
-                rec_walk_dict(v)
-            else: # is a list
-                rec_walk_list(v)
-
-    prediction['times_denormalised'] = deepcopy(prediction['times'])
-    rec_walk_dict(prediction['times_denormalised'])
-
-
-def download_logs(logs_meta, logs_dir):
-    if not os.path.exists(logs_dir): os.makedirs(logs_dir)
-
-    for log_name in tqdm(logs_meta, desc="downloading logs"):
-        remotefile = urlopen(logs_meta[log_name])
-        blah = remotefile.info()['Content-Disposition']
-        value, params = cgi.parse_header(blah)
-        filename = params["filename"]
-        urlretrieve(logs_meta[log_name], os.path.join(logs_dir, filename))
-
-    for file_name in os.listdir(logs_dir):
-        if file_name.endswith('.gz'):
-            gz_file_name = os.path.join(logs_dir, file_name)
-            with gzip.open(gz_file_name, 'rb') as f_in:
-                with open(gz_file_name[:-3], 'wb') as f_out:
-                    shutil.copyfileobj(f_in, f_out)
-
-
 def create_distributions(logs_dir, log_name=None):
     distributions = {}
     logs = {}
@@ -414,107 +283,207 @@ def create_distributions(logs_dir, log_name=None):
     return dict(sorted(distributions.items())), dict(sorted(logs.items()))
 
 
-def create_count_figure(counts):
-    b = 3  # number of columns
-    a = math.ceil(len(counts) / b)  # number of rows
-    c = 1  # initialize plot counter
+class Training:
+    def create_split_log(log, validation_ratio=0.2):
+        nb_training = math.ceil(len(log['traces']) * (1 - validation_ratio))
+        random.shuffle(log['traces'])
 
-    fig = plt.figure(figsize=(18, 12))
-    fig.tight_layout()
+        augmented_log = deepcopy(log)
+        del augmented_log['traces']
+        augmented_log['training_traces'] = log['traces'][:nb_training]
+        augmented_log['validation_traces'] = log['traces'][nb_training:]
 
-    counts = dict(sorted(counts.items()))
+        return augmented_log
 
-    for log_name, count in counts.items():
-        plt.subplot(a, b, c)
-        plt.title('{}'.format(log_name))
-        plt.xlabel('prefix')
-        plt.ylabel('# traces longer than prefix')
-        plt.bar(count.keys(), count.values())
-        # plt.plot(count.keys(), count.values())
-        fig.gca().get_xaxis().set_major_locator(plt.MaxNLocator(integer=True))
-        c = c + 1
+    # in-place normalisation:
+    def normalise(processed_log):
+        for trace in processed_log['traces']:
+            normalized_times = []
+            for time in trace['times']:
+                normalized_times.append((time - processed_log['min_time_value']) / (
+                        processed_log['max_time_value'] - processed_log['min_time_value']))
+            trace['times'] = normalized_times
+                    
+    def create_structured_log(log, log_name=None, to_normalise=True):
+        processed_log = {'id': str(log_name),
+                        'longest_trace_length': int(0),
+                        'traces': [],
+                        'activity_label_to_category_index': {},
+                        'category_index_to_activity_label': {},
+                        'nb_traces': len(log),
+                        'max_time_value': float("-inf"),
+                        'min_time_value': float("inf"),
+                        'vocabulary_size': None}
 
-    fig.subplots_adjust(wspace=0.2)
-    fig.subplots_adjust(hspace=0.6)
+        # It will create categories starting form 1 on
+        # Category 0 is always reserved for [PAD]
+        # Additional special tokens will be added later
+        activity_index = 0
 
-    return fig
+        for trace in log:
+            processed_trace = {'id': trace.attributes['concept:name'], 'activities': [], 'times': []}
+            last_datetime = None
+
+            if len(trace) > processed_log['longest_trace_length']: processed_log['longest_trace_length'] = len(trace)
+
+            for event in trace:
+                if event['concept:name'] in processed_log['activity_label_to_category_index'].keys():
+                    processed_trace['activities'].append(
+                        processed_log['activity_label_to_category_index'][event['concept:name']])
+                else:
+                    activity_index += 1
+                    processed_log['activity_label_to_category_index'][event['concept:name']] = activity_index
+                    processed_log['category_index_to_activity_label'][activity_index] = event['concept:name']
+                    processed_trace['activities'].append(
+                        processed_log['activity_label_to_category_index'][event['concept:name']])
+
+                if last_datetime is not None:
+                    diff = (event['time:timestamp'] - last_datetime).total_seconds() # decided to be on a second scale
+                    processed_trace['times'].append(diff)
+                    last_datetime = event['time:timestamp']
+
+                    if processed_log['max_time_value'] < diff:
+                        processed_log['max_time_value'] = diff
+                    if processed_log['min_time_value'] > diff:
+                        processed_log['min_time_value'] = diff
+                else:
+                    init_value = 0.0
+                    if processed_log['max_time_value'] < init_value:
+                        processed_log['max_time_value'] = init_value
+                    if processed_log['min_time_value'] > init_value:
+                        processed_log['min_time_value'] = init_value
+                    processed_trace['times'].append(init_value)
+                    last_datetime = event['time:timestamp']
+
+            processed_log['traces'].append(processed_trace)
+        processed_log['vocabulary_size'] = activity_index
+
+        if to_normalise:
+            Training.normalise(processed_log)
+
+        return processed_log
 
 
-def count_nb_traces_longer_than_prefix(trace_length_distributions, min_prefix=2, max_prefix=200, delete_zero_prefixes=True):
-    counts = {}
-
-    for log_name, log_distribution in trace_length_distributions.items():
-        counts[log_name] = {}
-        log_distribution = dict(sorted(log_distribution.items()))
-
-        for prefix in range(min_prefix, max_prefix):
-            counts[log_name][prefix] = 0
-            keys = log_distribution.keys()
-
-            for key in keys:
-                if key > prefix:
-                    counts[log_name][prefix] += log_distribution[key]
-
-    # delete zero-count prefixes:
-    if delete_zero_prefixes:
-        for log_name in counts.keys():
-            prefixes_to_delete =[]
-            for prefix in counts[log_name].keys():
-                if counts[log_name][prefix] == 0: prefixes_to_delete.append(prefix)
-            for prefix in prefixes_to_delete:
-                del counts[log_name][prefix]
-
-    return counts
-
-
-def suffix_evaluation_sum_dls(suffix_evaluation_result, model_type):
-    suffix_evaluation_sum_dls_result = {model_type: {}}
-
-    # have a fix order of event logs on the figure:
-    suffix_evaluation_result[model_type] = dict(sorted(suffix_evaluation_result[model_type].items()))
-
-    for log_name, prefix_dls_distribution in suffix_evaluation_result[model_type].items():
-        suffix_evaluation_sum_dls_result[model_type][log_name] = {'dls_per_prefix': {},
-                                                                  'dls': prefix_dls_distribution['dls'],
-                                                                  'nb_worst_situs': prefix_dls_distribution[
-                                                                      'nb_worst_situs'],
-                                                                  'nb_all_situs': prefix_dls_distribution['nb_all_situs']}
-
-        for prefix, dls_scores in prefix_dls_distribution['dls_per_prefix'].items():
-            if len(dls_scores):
-                suffix_evaluation_sum_dls_result[model_type][log_name]['dls_per_prefix'][prefix] = sum(dls_scores) / len(
-                    dls_scores)
+class Evaluation:
+    # in-place denormalisation:
+    def denormalise(prediction, in_days=True):
+        # in-place denormalisation:
+        def denorm(s):
+            if in_days:
+                return (float(s) * (float(prediction['max_time_value']) - float(prediction['min_time_value'])) + float(prediction['min_time_value'])) / 60 / 60 / 24
             else:
-                # for now passing:
-                pass
-                # suffix_evaluation_sum_dls_result[model_type][log_name]['dls_per_prefix'][prefix] = 0.0
+                return float(s) * (float(prediction['max_time_value']) - float(prediction['min_time_value'])) + float(prediction['min_time_value'])
 
-    return suffix_evaluation_sum_dls_result
+        def rec_walk_list(l):
+            for index, item in enumerate(l):
+                if isinstance(l[index], list): # is a list
+                    rec_walk_list(l[index])
+                else: # is a scalar
+                    l[index] = denorm(l[index])
 
+        def rec_walk_dict(d):
+            for k, v in d.items():
+                if isinstance(v, dict):
+                    rec_walk_dict(v)
+                else: # is a list
+                    rec_walk_list(v)
 
-
-def suffix_evaluation_sum_mae_denormalised(suffix_evaluation_result, model_type):
-    suffix_evaluation_sum_mae_result = {model_type: {}}
-
-    # have a fix order of event logs on the figure:
-    suffix_evaluation_result[model_type] = dict(sorted(suffix_evaluation_result[model_type].items()))
-
-    for log_name, prefix_dls_distribution in suffix_evaluation_result[model_type].items():
-        suffix_evaluation_sum_mae_result[model_type][log_name] = {'mae_denormalised_per_prefix': {},
-                                                                  'mae_denormalised': prefix_dls_distribution['mae_denormalised'],
-                                                                  'nb_worst_situs': prefix_dls_distribution['nb_worst_situs'],
-                                                                  'nb_all_situs': prefix_dls_distribution['nb_all_situs']}
-
-        for prefix, dls_scores in prefix_dls_distribution['mae_denormalised_per_prefix'].items():
-            if len(dls_scores):
-                suffix_evaluation_sum_mae_result[model_type][log_name]['mae_denormalised_per_prefix'][prefix] = sum(dls_scores) / len(dls_scores)
-            else:
-                # for now passing:
-                pass
-                # suffix_evaluation_sum_mae_result[model_type][log_name]['dls_per_prefix'][prefix] = 0.0
-
-    return suffix_evaluation_sum_mae_result
+        prediction['times_denormalised'] = deepcopy(prediction['times'])
+        rec_walk_dict(prediction['times_denormalised'])
 
 
+class Visualization:
+    def key_string_to_int(d):
+        return {int(k): v for k, v in d.items()}
     
-    return fig
+    def download_logs(logs_meta, logs_dir):
+        if not os.path.exists(logs_dir): os.makedirs(logs_dir)
+
+        for log_name in tqdm(logs_meta, desc="downloading logs"):
+            remotefile = urlopen(logs_meta[log_name])
+            blah = remotefile.info()['Content-Disposition']
+            value, params = cgi.parse_header(blah)
+            filename = params["filename"]
+            urlretrieve(logs_meta[log_name], os.path.join(logs_dir, filename))
+
+        for file_name in os.listdir(logs_dir):
+            if file_name.endswith('.gz'):
+                gz_file_name = os.path.join(logs_dir, file_name)
+                with gzip.open(gz_file_name, 'rb') as f_in:
+                    with open(gz_file_name[:-3], 'wb') as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+    
+    def count_nb_traces_longer_than_prefix(trace_length_distributions, min_prefix=2, max_prefix=200, delete_zero_prefixes=True):
+        counts = {}
+
+        for log_name, log_distribution in trace_length_distributions.items():
+            counts[log_name] = {}
+            log_distribution = dict(sorted(log_distribution.items()))
+
+            for prefix in range(min_prefix, max_prefix):
+                counts[log_name][prefix] = 0
+                keys = log_distribution.keys()
+
+                for key in keys:
+                    if key > prefix:
+                        counts[log_name][prefix] += log_distribution[key]
+
+        # delete zero-count prefixes:
+        if delete_zero_prefixes:
+            for log_name in counts.keys():
+                prefixes_to_delete =[]
+                for prefix in counts[log_name].keys():
+                    if counts[log_name][prefix] == 0: prefixes_to_delete.append(prefix)
+                for prefix in prefixes_to_delete:
+                    del counts[log_name][prefix]
+
+        return counts
+
+
+    def suffix_evaluation_sum_dls(suffix_evaluation_result, model_type):
+        suffix_evaluation_sum_dls_result = {model_type: {}}
+
+        # have a fix order of event logs on the figure:
+        suffix_evaluation_result[model_type] = dict(sorted(suffix_evaluation_result[model_type].items()))
+
+        for log_name, prefix_dls_distribution in suffix_evaluation_result[model_type].items():
+            suffix_evaluation_sum_dls_result[model_type][log_name] = {'dls_per_prefix': {},
+                                                                    'dls': prefix_dls_distribution['dls'],
+                                                                    'nb_worst_situs': prefix_dls_distribution[
+                                                                        'nb_worst_situs'],
+                                                                    'nb_all_situs': prefix_dls_distribution['nb_all_situs']}
+
+            for prefix, dls_scores in prefix_dls_distribution['dls_per_prefix'].items():
+                if len(dls_scores):
+                    suffix_evaluation_sum_dls_result[model_type][log_name]['dls_per_prefix'][prefix] = sum(dls_scores) / len(
+                        dls_scores)
+                else:
+                    # for now passing:
+                    pass
+                    # suffix_evaluation_sum_dls_result[model_type][log_name]['dls_per_prefix'][prefix] = 0.0
+
+        return suffix_evaluation_sum_dls_result
+
+
+
+    def suffix_evaluation_sum_mae_denormalised(suffix_evaluation_result, model_type):
+        suffix_evaluation_sum_mae_result = {model_type: {}}
+
+        # have a fix order of event logs on the figure:
+        suffix_evaluation_result[model_type] = dict(sorted(suffix_evaluation_result[model_type].items()))
+
+        for log_name, prefix_dls_distribution in suffix_evaluation_result[model_type].items():
+            suffix_evaluation_sum_mae_result[model_type][log_name] = {'mae_denormalised_per_prefix': {},
+                                                                    'mae_denormalised': prefix_dls_distribution['mae_denormalised'],
+                                                                    'nb_worst_situs': prefix_dls_distribution['nb_worst_situs'],
+                                                                    'nb_all_situs': prefix_dls_distribution['nb_all_situs']}
+
+            for prefix, dls_scores in prefix_dls_distribution['mae_denormalised_per_prefix'].items():
+                if len(dls_scores):
+                    suffix_evaluation_sum_mae_result[model_type][log_name]['mae_denormalised_per_prefix'][prefix] = sum(dls_scores) / len(dls_scores)
+                else:
+                    # for now passing:
+                    pass
+                    # suffix_evaluation_sum_mae_result[model_type][log_name]['dls_per_prefix'][prefix] = 0.0
+
+        return suffix_evaluation_sum_mae_result

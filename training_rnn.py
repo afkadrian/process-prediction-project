@@ -161,7 +161,7 @@ def main(args, dt_object):
     with open(os.path.join('config', 'logs_meta.json')) as f:
         logs_meta = json.load(f)
 
-    # data_preprocessing.download_logs(logs_meta, logs_dir)
+    # data_preprocessing.Visualization.download_logs(logs_meta, logs_dir)
     distributions, logs = data_preprocessing.create_distributions(logs_dir)
 
     for log_name in logs:
@@ -169,7 +169,7 @@ def main(args, dt_object):
             print('total GPU memory: ' + str(torch.cuda.get_device_properties(device=args.gpu).total_memory))
             print('allocated GPU memory: ' + str(torch.cuda.memory_allocated(device=args.gpu)))
 
-        processed_log = data_preprocessing.create_structured_log(logs[log_name], log_name=log_name)
+        processed_log = data_preprocessing.Training.create_structured_log(logs[log_name], log_name=log_name)
 
         path = os.path.join('results', 'rnn', str(processed_log['id']))
         if not os.path.exists(path): os.makedirs(path)
@@ -185,7 +185,7 @@ def main(args, dt_object):
                     print(split_log_file_name + ' is used as common data')
             del processed_log
         else:
-            split_log = data_preprocessing.create_split_log(processed_log, validation_ratio=args.validation_split)
+            split_log = data_preprocessing.Training.create_split_log(processed_log, validation_ratio=args.validation_split)
 
         with open(os.path.join(path, 'split_log_' + dt_object.strftime("%Y%m%d%H%M") + '.json'), 'w') as f:
             json.dump(split_log, f)

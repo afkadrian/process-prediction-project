@@ -22,10 +22,10 @@ def main(args):
         with open(os.path.join('config', 'logs_meta.json')) as f:
             logs_meta = json.load(f)
 
-        data_preprocessing.download_logs(logs_meta, logs_dir)
+        data_preprocessing.Visualization.download_logs(logs_meta, logs_dir)
         distributions, _ = data_preprocessing.create_distributions(logs_dir, log_name='file_name')
 
-        dls_counts = data_preprocessing.count_nb_traces_longer_than_prefix(trace_length_distributions=distributions)
+        dls_counts = data_preprocessing.Visualization.count_nb_traces_longer_than_prefix(trace_length_distributions=distributions)
         with open(os.path.join(path, 'nb_traces_longer_than_prefix.json'), 'w') as fp:
             json.dump(dls_counts, fp)
     else:
@@ -133,7 +133,7 @@ def main(args):
 
     for log in logs:
         if log in dls_counts.keys():
-            d = data_preprocessing.key_string_to_int(dls_counts[log])
+            d = data_preprocessing.Visualization.key_string_to_int(dls_counts[log])
             twin_subplots[log].bar(d.keys(),
                                    d.values(),
                                    color='lightgray')
@@ -149,8 +149,8 @@ def main(args):
                 for model_type in model_types:
                     if model_type in results.keys():
                         if log in results[model_type].keys():
-                            suffix_evaluation_sum_result = data_preprocessing.suffix_evaluation_sum_mae_denormalised(results, model_type)
-                            d = data_preprocessing.key_string_to_int(suffix_evaluation_sum_result[model_type][log]['mae_denormalised_per_prefix'])
+                            suffix_evaluation_sum_result = data_preprocessing.Visualization.suffix_evaluation_sum_mae_denormalised(results, model_type)
+                            d = data_preprocessing.Visualization.key_string_to_int(suffix_evaluation_sum_result[model_type][log]['mae_denormalised_per_prefix'])
                             subplots[log].plot(d.keys(),
                                                d.values(),
                                                label=model_type)
