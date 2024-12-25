@@ -492,29 +492,6 @@ def suffix_evaluation_sum_dls(suffix_evaluation_result, model_type):
     return suffix_evaluation_sum_dls_result
 
 
-def suffix_evaluation_sum_mae(suffix_evaluation_result, model_type):
-    suffix_evaluation_sum_mae_result = {model_type: {}}
-
-    # have a fix order of event logs on the figure:
-    suffix_evaluation_result[model_type] = dict(sorted(suffix_evaluation_result[model_type].items()))
-
-    for log_name, prefix_dls_distribution in suffix_evaluation_result[model_type].items():
-        suffix_evaluation_sum_mae_result[model_type][log_name] = {'mae_per_prefix': {},
-                                                                  'mae': prefix_dls_distribution['mae'],
-                                                                  'nb_worst_situs': prefix_dls_distribution['nb_worst_situs'],
-                                                                  'nb_all_situs': prefix_dls_distribution['nb_all_situs']}
-
-        for prefix, dls_scores in prefix_dls_distribution['mae_per_prefix'].items():
-            if len(dls_scores):
-                suffix_evaluation_sum_mae_result[model_type][log_name]['mae_per_prefix'][prefix] = sum(dls_scores) / len(
-                    dls_scores)
-            else:
-                # for now passing:
-                pass
-                # suffix_evaluation_sum_mae_result[model_type][log_name]['dls_per_prefix'][prefix] = 0.0
-
-    return suffix_evaluation_sum_mae_result
-
 
 def suffix_evaluation_sum_mae_denormalised(suffix_evaluation_result, model_type):
     suffix_evaluation_sum_mae_result = {model_type: {}}
@@ -539,30 +516,5 @@ def suffix_evaluation_sum_mae_denormalised(suffix_evaluation_result, model_type)
     return suffix_evaluation_sum_mae_result
 
 
-def create_prefix_dls_distribution_figure(suffix_evaluation_result, model_type):
-    suffix_evaluation_sum_result = suffix_evaluation_sum_dls(suffix_evaluation_result, model_type)
-    
-    b = 3  # number of columns
-    a = math.ceil(len(suffix_evaluation_sum_result[model_type]) / b)  # number of rows
-    c = 1  # initialize plot counter
-
-    fig = plt.figure(figsize=(18, 12))
-    fig.tight_layout()
-
-    for log_name, prefix_dls_distribution in suffix_evaluation_sum_result[model_type].items():
-        plt.subplot(a, b, c)
-        plt.title('{}'.format(log_name))
-        plt.xlabel('prefix length')
-        plt.ylim(0.0, 1.0)
-        plt.ylabel('dls')
-        plt.text(0.05,
-                 0.85,
-                 "model:" + model_type + ",dls:" + prefix_dls_distribution['dls'] + ",worst:" + str(prefix_dls_distribution['nb_worst_situs']) + ",all:" + str(prefix_dls_distribution['nb_all_situs']) + ",w/a:" + "{:.2f}".format(prefix_dls_distribution['nb_worst_situs']/prefix_dls_distribution['nb_all_situs']))
-        plt.bar(prefix_dls_distribution['dls_per_prefix'].keys(), prefix_dls_distribution['dls_per_prefix'].values())
-        fig.gca().get_xaxis().set_major_locator(plt.MaxNLocator(integer=True))
-        c += 1
-
-    fig.subplots_adjust(wspace=0.2)
-    fig.subplots_adjust(hspace=0.6)
     
     return fig
