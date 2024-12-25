@@ -1,11 +1,11 @@
 {
-	"BPIC_2012": "https://data.4tu.nl/ndownloader/files/24027287",
-	"BPIC_2013_incidents": "https://data.4tu.nl/ndownloader/files/24033593",
-	"BPIC_2013_open_problems": "https://data.4tu.nl/ndownloader/files/24026252",
-	"BPIc_2013_closed_problems": "https://data.4tu.nl/ndownloader/files/24070847",
-	"BPIC_2015_1": "https://data.4tu.nl/ndownloader/files/24063818",
-	"BPIC_2017": "https://data.4tu.nl/ndownloader/files/24044117",
-	"Sepsis cases": "https://data.4tu.nl/ndownloader/files/24061976",
-	"Road Traffic Fine Management Process": "https://data.4tu.nl/ndownloader/files/24018146",
-	"HelpDesk": "https://mendeley.figshare.com/ndownloader/files/16362776"
+	"BPIC_2012": "https://data.4tu.nl/ndownloader/items/533f66a4-8911-4ac7-8612-1235d65d1f37/versions/1",
+	"BPIC_2013_incidents": "https://data.4tu.nl/ndownloader/items/0fc5c579-e544-4fab-9143-fab1f5192432/versions/1",
+	"BPIC_2013_open_problems": "https://data.4tu.nl/ndownloader/items/7aafbf5b-97ae-48ba-bd0a-4d973a68cd35/versions/1",
+	"BPIc_2013_closed_problems": "https://data.4tu.nl/ndownloader/items/1987a2a6-9f5b-4b14-8d26-ab7056b17929/versions/1",
+	"BPIC_2015_1": "https://data.4tu.nl/ndownloader/items/6f35269e-4ce7-4bc4-9abb-b3cea04cad00/versions/1",
+	"BPIC_2017": "https://data.4tu.nl/ndownloader/items/34c3f44b-3101-4ea9-8281-e38905c68b8d/versions/1",
+	"Sepsis cases": "https://data.4tu.nl/ndownloader/items/33632f3c-5c48-40cf-8d8f-2db57f5a6ce7/versions/1",
+	"Road Traffic Fine Management Process": "https://data.4tu.nl/ndownloader/items/806acd1a-2bf2-4e39-be21-69b8cad10909/versions/1",
+	"HelpDesk": "https://prod-dcd-datasets-cache-zipfiles.s3.eu-west-1.amazonaws.com/39bp3vv62t-1.zip"
 }
