@@ -20,4 +20,4 @@ Scripts with main functions:
 
 1. `training_<xxx>.py`: Training of the models
 2. `evaluation.py`: Inference and evaluation of the models. Calculates DLS and MAE results.
-3. `all_models_dls.py` / `all_models_mae_denormalised.py`: Visualize the results of the models.
+3. `all_models_dls.py` / `all_models_mae_denormalised.py` / `case_length_statistics.py`: Visualize the results of the models.
