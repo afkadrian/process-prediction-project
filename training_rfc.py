@@ -189,7 +189,7 @@ def main(args):
         )
 
         # Create output directory
-        output_path = os.path.join('results', 'random_forest' if not args.boosting else 'gradient_boosting', str(processed_log['id']))
+        output_path = os.path.join('results', f'random_forest{str(args.trial_id)}' if not args.boosting else f'gradient_boosting{str(args.trial_id)}', str(processed_log['id']))
         os.makedirs(output_path, exist_ok=True)
 
         # Train and evaluate model
@@ -210,6 +210,7 @@ if __name__ == '__main__':
     parser.add_argument('--single_position_target', type=bool, default=True, help='Whether to predict a single position or the entire suffix.')
     parser.add_argument('--boosting', action='store_true', help='Use Gradient Boosting instead of Random Forest.')
     parser.add_argument('--window_size', type=int, default=3, help='Size of the fixed window prefix.')
+    parser.add_argument('--trial_id', type=str, default='', help='Set trial ID for running multiple experiments.')
 
     args = parser.parse_args()
     main(args)
