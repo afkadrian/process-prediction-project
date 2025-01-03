@@ -143,7 +143,8 @@ def train_model(log_with_prefixes, args, output_path, max_length=None):
         'validation_batch_size': args.validation_batch_size,
         'pad_token': args.pad_token,
         'single_position_target': args.single_position_target,
-        'boosting': args.boosting
+        'boosting': args.boosting,
+        'window_size': args.window_size
     }
 
     with open(os.path.join(output_path, 'results.json'), 'w') as f:
