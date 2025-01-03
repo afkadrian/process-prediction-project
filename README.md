@@ -18,9 +18,47 @@
 
 Scripts with main functions:
 
-1. `training_<xxx>.py`: Training of the models
-2. `evaluation.py`: Inference and evaluation of the models. Calculates DLS and MAE results.
-3. `all_models_dls.py` / `all_models_mae_denormalised.py` / `case_length_statistics.py`: Visualize the results of the models.
+- `training_<xxx>.py`: Training of the models
+  - results/:
+    - Pro Modell, Pro Event Log:
+
+      - checkpoints: **for evaluation**
+        - model
+
+      - split_log_timestamp.json: **for evaluation**
+        - basically eventlog in json format
+        - mit training + test split
+
+      - experiment_parameters.json
+        - arguments aus training_rnn.py
+
+      - training_figures_timestamp.json
+        - pro epoche
+          - loss, accuracy, f1, precision, recall
+
+- `evaluation.py`: Inference and evaluation of the models. Calculates DLS and MAE results.
+  - results/:
+    - Pro Modell, Pro Event Log:
+
+      - suffix_evaluation_result_dls_mae_timestamp.json: **for visualization**
+        - DLS and MAE results
+
+      - suffix_generation_result_timestamp.json
+        - generated event log
+
+      - evaluation_parameters.json
+        - arguments aus evaluation.py
+
+- `all_models_dls.py` / `all_models_mae_denormalised.py` / `case_length_statistics.py`: Visualize the results of the models.
+  - figures/:
+    - all_models_dls.png: **for figure 4**
+    - all_models_mae_denormalised.png: **for figure 5**
+    - case_length_statistics.png: **for figure 3**
+    - nb_traces_longer_than_prefix.json: utility file
+    - table_dls.tex
+    - table_mae_normalized.tex
+    - table_transpose_dls.tex: **for table 1**
+    - table_transpose_mae_normalized.tex: **for table 2**
 
 ### Logs
 
