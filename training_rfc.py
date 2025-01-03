@@ -171,8 +171,8 @@ def main(args):
     distributions, logs = data_preprocessing.create_distributions(logs_dir)
 
     for log_name in logs:
-        processed_log = data_preprocessing.create_structured_log(logs[log_name], log_name=log_name)
-        split_log = data_preprocessing.create_split_log(processed_log, validation_ratio=args.validation_split)
+        processed_log = data_preprocessing.Training.create_structured_log(logs[log_name], log_name=log_name)
+        split_log = data_preprocessing.Training.create_split_log(processed_log, validation_ratio=args.validation_split)
 
         # Create prefixes and suffixes
         log_with_prefixes = data_preprocessing.create_prefixes(
@@ -193,7 +193,7 @@ def main(args):
         os.makedirs(output_path, exist_ok=True)
 
         # Train and evaluate model
-        timestamp = train_model(log_with_prefixes, args, output_path, max_length=3)
+        timestamp = train_model(log_with_prefixes, args, output_path, max_length=args.window_size)
         # Save split_log with timestamp in filename
         split_log_filename = f"split_log_{timestamp}.json"
         with open(os.path.join(output_path, split_log_filename), 'w') as f:
@@ -209,6 +209,7 @@ if __name__ == '__main__':
     parser.add_argument('--pad_token', type=int, default=0, help='Token used for padding sequences.')
     parser.add_argument('--single_position_target', type=bool, default=True, help='Whether to predict a single position or the entire suffix.')
     parser.add_argument('--boosting', action='store_true', help='Use Gradient Boosting instead of Random Forest.')
+    parser.add_argument('--window_size', type=int, default=3, help='Size of the fixed window prefix.')
 
     args = parser.parse_args()
     main(args)
