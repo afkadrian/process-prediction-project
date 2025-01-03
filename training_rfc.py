@@ -84,7 +84,7 @@ def prepare_data(log_with_prefixes, subset='training', max_length=None):
 
     return X, y_activity, y_time, max_length
 
-def train_model(log_with_prefixes, args, output_path):
+def train_model(log_with_prefixes, args, output_path, max_length=None):
     """
     Train and evaluate a model (Random Forest or Gradient Boosting).
     Args:
@@ -93,7 +93,7 @@ def train_model(log_with_prefixes, args, output_path):
         output_path: Directory to save results.
     """
     # Prepare training data and calculate max_length
-    X_train, y_train_activity, y_train_time, max_length = prepare_data(log_with_prefixes, subset='training')
+    X_train, y_train_activity, y_train_time, max_length = prepare_data(log_with_prefixes, subset='training', max_length=max_length)
 
     # Prepare validation data using the same max_length
     X_val, y_val_activity, y_val_time, _ = prepare_data(log_with_prefixes, subset='validation', max_length=max_length)
@@ -163,7 +163,7 @@ def main(args):
         # Create prefixes and suffixes
         log_with_prefixes = data_preprocessing.create_prefixes(
             split_log,
-            min_prefix=2,
+            min_prefix=1,
             create_tensors=False,  # Random Forest/Gradient Boosting doesn't need tensors
             add_special_tokens=True,
             pad_sequences=True,
@@ -179,7 +179,7 @@ def main(args):
         os.makedirs(output_path, exist_ok=True)
 
         # Train and evaluate model
-        train_model(log_with_prefixes, args, output_path)
+        train_model(log_with_prefixes, args, output_path, max_length=3)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train a Random Forest or Gradient Boosting model for process suffix prediction.')
