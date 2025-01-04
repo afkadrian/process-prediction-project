@@ -375,17 +375,19 @@ def train_rnn(args, log, log_name, dt_object):
         model.train()
         dt_object_training_start = datetime.datetime.now()
 
-        training_loss_activity, training_loss_time, training_accuracy, training_mse  = iterate_over_prefixes(
-            log_with_prefixes=log_with_prefixes,
-            batch_size=args.training_batch_size,
-            model=model,
-            device=args.device,
-            categorical_criterion=categorical_criterion,
-            regression_criterion=regression_criterion,
-            subset="training",
-            optimizer=optimizer,
-            lagrange_a=args.lagrange_a,
-            to_wrap_into_torch_dataset=args.to_wrap_into_torch_dataset,
+        training_loss_activity, training_loss_time, training_accuracy, training_mse = (
+            iterate_over_prefixes(
+                log_with_prefixes=log_with_prefixes,
+                batch_size=args.training_batch_size,
+                model=model,
+                device=args.device,
+                categorical_criterion=categorical_criterion,
+                regression_criterion=regression_criterion,
+                subset="training",
+                optimizer=optimizer,
+                lagrange_a=args.lagrange_a,
+                to_wrap_into_torch_dataset=args.to_wrap_into_torch_dataset,
+            )
         )
 
         dt_object_training_end = datetime.datetime.now()
@@ -396,7 +398,12 @@ def train_rnn(args, log, log_name, dt_object):
 
         model.eval()
         with torch.no_grad():
-            validation_loss_activity, validation_loss_time, validation_accuracy, validation_mse = iterate_over_prefixes(
+            (
+                validation_loss_activity,
+                validation_loss_time,
+                validation_accuracy,
+                validation_mse,
+            ) = iterate_over_prefixes(
                 log_with_prefixes=log_with_prefixes,
                 batch_size=args.validation_batch_size,
                 model=model,
@@ -412,7 +419,9 @@ def train_rnn(args, log, log_name, dt_object):
         total_validation_loss_fix_masks = 99
 
         if isinstance(validation_loss_time, float):  # If time predictions exist
-            total_validation_loss = validation_loss_activity + args.lagrange_a * validation_loss_time
+            total_validation_loss = (
+                validation_loss_activity + args.lagrange_a * validation_loss_time
+            )
             with open(os.path.join(path, training_log_filename), "a") as myfile:
                 myfile.write(
                     dt_object.strftime("%Y%m%d%H%M")
@@ -423,7 +432,9 @@ def train_rnn(args, log, log_name, dt_object):
                     + ","
                     + "{:.4f}".format(training_loss_time)
                     + ","
-                    + "{:.4f}".format(training_loss_activity + args.lagrange_a * training_loss_time)
+                    + "{:.4f}".format(
+                        training_loss_activity + args.lagrange_a * training_loss_time
+                    )
                     + ","
                     + "{:.4f}".format(validation_loss_activity)
                     + ","
