@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 import math
+import torch.nn.init as init
 
 # http://nlp.seas.harvard.edu/2018/04/03/attention.html#embeddings-and-softmax
 # TODO study the example with padding_idx part at https://pytorch.org/docs/stable/generated/torch.nn.Embedding.html
@@ -231,3 +232,120 @@ class SequentialDiscriminator(nn.Module):
 
     def forward(self, x):
         return self.dropout(self.readout(self.cell(self.value_embedding(x))[0]))
+    
+# credits to https://github.com/litanli/wavenet-time-series-forecasting/blob/master/wavenet_pytorch.py
+class DilatedCausalConv1d(nn.Module):
+    def __init__(self, hyperparams: dict, dilation_factor: int, in_channels: int):
+        super().__init__()
+
+        def weights_init(m):
+            if isinstance(m, nn.Conv1d):
+                init.kaiming_normal_(m.weight.data)
+                init.zeros_(m.bias.data)
+
+        self.dilation_factor = dilation_factor
+        self.dilated_causal_conv = nn.Conv1d(in_channels=in_channels,
+                                             out_channels=hyperparams['nb_filters'],
+                                             kernel_size=hyperparams['kernel_size'],
+                                             dilation=dilation_factor)
+        self.dilated_causal_conv.apply(weights_init)
+
+        self.skip_connection = nn.Conv1d(in_channels=in_channels,
+                                         out_channels=hyperparams['nb_filters'],
+                                         kernel_size=1)
+        self.skip_connection.apply(weights_init)
+        self.leaky_relu = nn.LeakyReLU(0.1)
+        self.layer_norm = nn.LayerNorm(hyperparams['nb_filters'])
+
+    def forward(self, x):
+        x1 = self.leaky_relu(self.dilated_causal_conv(x))
+        x2 = x[:, :, self.dilation_factor:]
+        x2 = self.skip_connection(x2)
+        return self.layer_norm((x1 + x2).transpose(1, 2)).transpose(1, 2)
+
+class WaveNet(nn.Module):
+    def __init__(self,
+                 hidden_size,
+                 n_layers=4,
+                 dropout_prob=0.0,
+                 pad_token=None,
+                 sos_token=None,
+                 eos_token=None,
+                 mask_token=None,
+                 vocab_size=None,
+                 attributes_meta=None,
+                 time_attribute_concatenated=False,
+                 nb_special_tokens=None,
+                 architecture=None):
+        super().__init__()
+
+        def weights_init(m):
+            if isinstance(m, nn.Conv1d):
+                init.kaiming_normal_(m.weight.data)
+                init.zeros_(m.bias.data)
+
+        in_channels = hidden_size
+        hyperparams = {'nb_layers': n_layers,
+                       'nb_filters': hidden_size,
+                       'kernel_size': 2}
+
+        if architecture is not None:
+            self.architecture = architecture
+
+        self.dropout_prob = dropout_prob
+        self.hidden_size = hidden_size
+        self.pad_token = pad_token
+        self.sos_token = sos_token
+        self.eos_token = eos_token
+        self.mask_token = mask_token
+        self.attributes_meta = attributes_meta
+        self.time_attribute_concatenated = time_attribute_concatenated
+        self.nb_special_tokens = nb_special_tokens
+        self.vocab_size = vocab_size + self.nb_special_tokens
+
+        self.dilation_factors = [2 ** i for i in range(0, hyperparams['nb_layers'])]
+        self.in_channels = [in_channels] + [hyperparams['nb_filters'] for _ in range(hyperparams['nb_layers'])]
+        self.dilated_causal_convs = nn.Sequential(
+            *[DilatedCausalConv1d(hyperparams, self.dilation_factors[i], self.in_channels[i]) for i in
+              range(hyperparams['nb_layers'])])
+        for dilated_causal_conv in self.dilated_causal_convs:
+            dilated_causal_conv.apply(weights_init)
+
+        self.output_layer = nn.Conv1d(in_channels=self.in_channels[-1],
+                                      out_channels=self.hidden_size,
+                                      kernel_size=1)
+        self.output_layer.apply(weights_init)
+        self.leaky_relu = nn.LeakyReLU(0.1)
+
+        self.value_embedding = Embedding(d_model=self.hidden_size,
+                                         vocab_size=self.vocab_size,
+                                         dropout_prob=self.dropout_prob,
+                                         attributes_meta=self.attributes_meta,
+                                         time_attribute_concatenated=self.time_attribute_concatenated,
+                                         pad_token=self.pad_token)
+        self.readout = Readout(d_model=self.hidden_size,
+                               vocab_size=self.vocab_size,
+                               dropout_prob=self.dropout_prob,
+                               attributes_meta=self.attributes_meta,
+                               time_attribute_concatenated=self.time_attribute_concatenated)
+
+        receptive_field = 2 ** (hyperparams['nb_layers'] - 1) * hyperparams['kernel_size']
+        print('receptive_field: ' + str(receptive_field))
+        self.left_padding = receptive_field - 1
+
+    def forward(self, x, left_padding=None):
+        x = self.value_embedding(x)
+        x = x.transpose(1, 2)
+
+        if left_padding is None:
+            x = nn.functional.pad(x, (self.left_padding, 0), mode='constant', value=0)
+        else:
+            if left_padding > 0:
+                x = nn.functional.pad(x, (left_padding, 0), mode='constant', value=0)
+
+        x = self.dilated_causal_convs(x)
+        x = self.leaky_relu(self.output_layer(x))
+
+        x = x.transpose(1, 2)
+        x = self.readout(x)
+        return x

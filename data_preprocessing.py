@@ -16,6 +16,138 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 
+# Sequences for the transformer models
+def create_transformer_augmentation(log,
+                                    pad_token=0,
+                                    training_batch_size=None,
+                                    validation_batch_size=None):
+
+    augmented_log = deepcopy(log)
+    augmented_log['training_augmented_traces'] = {'ids': [],
+                                                  'activities': {'input': [], 'target': []},
+                                                  'times': {'input': [], 'target': []}}
+    augmented_log['validation_augmented_traces'] = {'ids': [],
+                                                    'activities': {'input': [], 'target': []},
+                                                    'times': {'input': [], 'target': []}}
+
+    def iterate_over_traces(log,
+                            subset='training',
+                            pad_token=0):
+
+        with torch.no_grad():
+            dynamic_tensification = torch.tensor
+
+            # Defining the tokens for [SOS] and [EOS]:
+            sos_token = log['vocabulary_size'] + 1
+            eos_token = log['vocabulary_size'] + 2
+            log['sos_token'] = sos_token
+            log['eos_token'] = eos_token
+            log['pad_token'] = pad_token
+
+            # Very interesting research question:
+            time_attribute_padding_value = 0.0
+
+            # For each original trace in the log:
+            for trace in tqdm(log[subset + '_traces'], desc='creating ' + subset + ' prefixes of ' + augmented_log['id'] + ' for transformer'):
+                max_prefix = len(trace['activities'])
+
+                activities_sequence_input = [sos_token] + trace['activities']
+                times_sequence_input = [time_attribute_padding_value] + trace['times']
+                activities_sequence_target = trace['activities'] + [eos_token]
+                times_sequence_target = trace['times'] + [time_attribute_padding_value]
+
+                log[subset + '_augmented_traces']['activities']['input'].append(
+                    dynamic_tensification(activities_sequence_input))
+                log[subset + '_augmented_traces']['activities']['target'].append(
+                    dynamic_tensification(activities_sequence_target))
+                log[subset + '_augmented_traces']['times']['input'].append(
+                    dynamic_tensification(times_sequence_input))
+                log[subset + '_augmented_traces']['times']['target'].append(
+                    dynamic_tensification(times_sequence_target))
+                log[subset + '_augmented_traces']['ids'].append(trace['id'])
+
+            # Create a suffix tensor (in each prefix list) which has the max length for sure:
+            an_activities_sequence_input = log[subset + '_augmented_traces']['activities']['input'][0]
+            a_times_sequence_input = log[subset + '_augmented_traces']['times']['input'][0]
+            an_activities_sequence_target = log[subset + '_augmented_traces']['activities']['target'][0]
+            a_times_sequence_target = log[subset + '_augmented_traces']['times']['target'][0]
+
+            # Max length is extended by one to cover [EOS] (target) and [SOS] (input)
+            max_length = log['longest_trace_length'] + 1
+
+            extension = pad_token * torch.ones((max_length - an_activities_sequence_input.size(0)))
+            log[subset + '_augmented_traces']['activities']['input'][0] = torch.cat((an_activities_sequence_input, extension))
+            extension = time_attribute_padding_value * torch.ones((max_length - a_times_sequence_input.size(0)))
+            log[subset + '_augmented_traces']['times']['input'][0] = torch.cat((a_times_sequence_input, extension))
+            extension = pad_token * torch.ones((max_length - an_activities_sequence_target.size(0)))
+            log[subset + '_augmented_traces']['activities']['target'][0] = torch.cat((an_activities_sequence_target, extension))
+            extension = time_attribute_padding_value * torch.ones((max_length - a_times_sequence_target.size(0)))
+            log[subset + '_augmented_traces']['times']['target'][0] = torch.cat((a_times_sequence_target, extension))
+
+            log[subset + '_augmented_traces']['activities']['input'] = torch.nn.utils.rnn.pad_sequence(
+                log[subset + '_augmented_traces']['activities']['input'],
+                batch_first=True,
+                padding_value=pad_token)
+            log[subset + '_augmented_traces']['activities']['target'] = torch.nn.utils.rnn.pad_sequence(
+                log[subset + '_augmented_traces']['activities']['target'],
+                batch_first=True,
+                padding_value=pad_token)
+            log[subset + '_augmented_traces']['times']['input'] = torch.nn.utils.rnn.pad_sequence(
+                log[subset + '_augmented_traces']['times']['input'],
+                batch_first=True,
+                padding_value=pad_token)
+            log[subset + '_augmented_traces']['times']['target'] = torch.nn.utils.rnn.pad_sequence(
+                log[subset + '_augmented_traces']['times']['target'],
+                batch_first=True,
+                padding_value=pad_token)
+
+            return log
+
+    augmented_log = iterate_over_traces(log=augmented_log,
+                                        subset='training',
+                                        pad_token=pad_token)
+    augmented_log = iterate_over_traces(log=augmented_log,
+                                        subset='validation',
+                                        pad_token=pad_token)
+
+    # Transform the log in place
+    def wrap_into_torch_dataset(log, subset, batch_size):
+        a_s_i = log[subset + '_augmented_traces']['activities']['input'].unsqueeze(2)
+        t_s_i = log[subset + '_augmented_traces']['times']['input'].unsqueeze(2)
+        a_s_t = log[subset + '_augmented_traces']['activities']['target'].long()
+        t_s_t = log[subset + '_augmented_traces']['times']['target'].unsqueeze(2)
+
+        if subset == 'training':
+            d_l = DataLoader(dataset=TensorDataset(a_s_i, t_s_i, a_s_t, t_s_t),
+                             pin_memory=True,
+                             shuffle=True,
+                             batch_size=batch_size)
+                             #persistent_workers=True,
+                             #num_workers=2,
+                             #prefetch_factor=4)
+        else:
+            d_l = DataLoader(dataset=TensorDataset(a_s_i, t_s_i, a_s_t, t_s_t),
+                             pin_memory=True,
+                             shuffle=False,
+                             batch_size=batch_size)
+                             #persistent_workers=True,
+                             #num_workers=2,
+                             #prefetch_factor=4)
+
+        log[subset + '_torch_data_loaders'] = d_l
+
+        del log[subset + '_augmented_traces']['activities']['input']
+        del log[subset + '_augmented_traces']['times']['input']
+        del log[subset + '_augmented_traces']['activities']['target']
+        del log[subset + '_augmented_traces']['times']['target']
+
+    augmented_log['training_torch_data_loaders']= {}
+    augmented_log['validation_torch_data_loaders'] = {}
+    wrap_into_torch_dataset(log=augmented_log, subset='training', batch_size=training_batch_size)
+    wrap_into_torch_dataset(log=augmented_log, subset='validation', batch_size=validation_batch_size)
+
+    return augmented_log
+
 
 # TODO having a parameter & del training prefixes during eval
 # Prefixes for the sequential encoder-decoder models

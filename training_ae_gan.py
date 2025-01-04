@@ -83,10 +83,15 @@ def iterate_over_prefixes(
     to_wrap_into_torch_dataset=None,
     current_epoch=None,
 ):
-
     summa_categorical_loss = 0.0
     summa_regression_loss = 0.0
     steps = 0
+
+    # Initialize metrics
+    total_correct_activities = 0
+    total_activities = 0
+    total_time_squared_error = 0
+    total_time_samples = 0
 
     generator = model[0]
     discriminator = model[1]
@@ -99,6 +104,7 @@ def iterate_over_prefixes(
         for prefix in log_with_prefixes[subset + "_prefixes_and_suffixes"][
             "activities"
         ]["prefixes"].keys():
+
             activities_prefixes = log_with_prefixes[subset + "_prefixes_and_suffixes"][
                 "activities"
             ]["prefixes"][prefix]
@@ -210,7 +216,16 @@ def iterate_over_prefixes(
                     prediction[0].transpose(2, 1), activities_suffixes_target_batch
                 )
 
-                # the auxiliary adversarial training objective (for now just during training):
+                # Calculate activity accuracy
+                predicted_activities = torch.argmax(prediction[0], dim=2)
+                correct_activities = (
+                    (predicted_activities == activities_suffixes_target_batch)
+                    .sum()
+                    .item()
+                )
+                total_correct_activities += correct_activities
+                total_activities += activities_suffixes_target_batch.numel()
+
                 if subset == "training":
                     t = np.power(0.9, current_epoch)
                     soft_sampled_prediction_categories_for_discriminator = (
@@ -244,15 +259,12 @@ def iterate_over_prefixes(
                             size=prediction_real.size(), device=prediction_real.device
                         ),
                     )
-                    # let's speed it up:
-                    # loss_real.backward()
                     loss_fake = adversarial_criterion(
                         prediction_fake,
                         torch.zeros(
                             size=prediction_fake.size(), device=prediction_fake.device
                         ),
                     )
-                    # loss_fake.backward()
                     (loss_real + loss_fake).backward()
                     optimizer_discriminator.step()
                     soft_sampled_prediction_categories_for_generator = (
@@ -272,14 +284,21 @@ def iterate_over_prefixes(
                             size=prediction_fake.size(), device=prediction_fake.device
                         ),
                     )
-                    # adversarial_loss.backward(retain_graph=True)
 
-                # If time attribute and time prediction present:
                 if len(prediction) > 1:
                     regression_criterion.reduction = "mean"
                     regression_loss = regression_criterion(
                         prediction[1], times_suffixes_target_batch
                     )
+
+                    # Calculate time MSE
+                    time_squared_error = (
+                        ((prediction[1] - times_suffixes_target_batch) ** 2)
+                        .sum()
+                        .item()
+                    )
+                    total_time_squared_error += time_squared_error
+                    total_time_samples += times_suffixes_target_batch.numel()
 
                     if subset == "training":
                         (
@@ -301,13 +320,25 @@ def iterate_over_prefixes(
                 if subset == "training":
                     optimizer_generator.step()
 
+        # Calculate final metrics
+        activity_accuracy = (
+            total_correct_activities / total_activities if total_activities > 0 else 0
+        )
+        time_mse = (
+            total_time_squared_error / total_time_samples
+            if total_time_samples > 0
+            else 0
+        )
+
         if len(prediction) > 1:
             return (
                 summa_categorical_loss.item() / steps,
                 summa_regression_loss.item() / steps,
+                activity_accuracy,
+                time_mse,
             )
         else:
-            return (summa_categorical_loss.item() / steps,)
+            return (summa_categorical_loss.item() / steps, activity_accuracy)
     else:
         if subset == "training":
             prefixes = list(log_with_prefixes[subset + "_torch_data_loaders"].keys())
@@ -355,7 +386,12 @@ def iterate_over_prefixes(
                     prediction[0].transpose(2, 1), a_s_t
                 )
 
-                # the auxiliary adversarial training objective (for now just during training):
+                # Calculate activity accuracy
+                predicted_activities = torch.argmax(prediction[0], dim=2)
+                correct_activities = (predicted_activities == a_s_t).sum().item()
+                total_correct_activities += correct_activities
+                total_activities += a_s_t.numel()
+
                 if subset == "training":
                     t = np.power(0.9, current_epoch)
                     soft_sampled_prediction_categories_for_discriminator = (
@@ -384,15 +420,12 @@ def iterate_over_prefixes(
                             size=prediction_real.size(), device=prediction_real.device
                         ),
                     )
-                    # let's speed it up:
-                    # loss_real.backward()
                     loss_fake = adversarial_criterion(
                         prediction_fake,
                         torch.zeros(
                             size=prediction_fake.size(), device=prediction_fake.device
                         ),
                     )
-                    # loss_fake.backward()
                     (loss_real + loss_fake).backward()
                     torch.nn.utils.clip_grad_norm_(
                         discriminator.parameters(), max_norm=1
@@ -415,12 +448,15 @@ def iterate_over_prefixes(
                             size=prediction_fake.size(), device=prediction_fake.device
                         ),
                     )
-                    # adversarial_loss.backward(retain_graph=True)
 
-                # If time attribute and time prediction present:
                 if len(prediction) > 1:
                     regression_criterion.reduction = "mean"
                     regression_loss = regression_criterion(prediction[1], t_s_t)
+
+                    # Calculate time MSE
+                    time_squared_error = ((prediction[1] - t_s_t) ** 2).sum().item()
+                    total_time_squared_error += time_squared_error
+                    total_time_samples += t_s_t.numel()
 
                     if subset == "training":
                         (
@@ -443,13 +479,25 @@ def iterate_over_prefixes(
                     torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=1)
                     optimizer_generator.step()
 
+        # Calculate final metrics
+        activity_accuracy = (
+            total_correct_activities / total_activities if total_activities > 0 else 0
+        )
+        time_mse = (
+            total_time_squared_error / total_time_samples
+            if total_time_samples > 0
+            else 0
+        )
+
         if len(prediction) > 1:
             return (
                 summa_categorical_loss.item() / steps,
                 summa_regression_loss.item() / steps,
+                activity_accuracy,
+                time_mse,
             )
         else:
-            return (summa_categorical_loss.item() / steps,)
+            return (summa_categorical_loss.item() / steps, activity_accuracy)
 
 
 def main(args, dt_object):
@@ -468,7 +516,7 @@ def main(args, dt_object):
     with open(os.path.join("config", "logs_meta.json")) as f:
         logs_meta = json.load(f)
 
-    # data_preprocessing.download_logs(logs_meta, logs_dir)
+    # data_preprocessing.Training.download_logs(logs_meta, logs_dir)
     distributions, logs = data_preprocessing.create_distributions(logs_dir)
 
     for log_name in logs:
@@ -482,7 +530,7 @@ def main(args, dt_object):
                 + str(torch.cuda.memory_allocated(device=args.gpu))
             )
 
-        processed_log = data_preprocessing.create_structured_log(
+        processed_log = data_preprocessing.Training.create_structured_log(
             logs[log_name], log_name=log_name
         )
 
@@ -503,7 +551,7 @@ def main(args, dt_object):
                     print(split_log_file_name + " is used as common data")
             del processed_log
         else:
-            split_log = data_preprocessing.create_split_log(
+            split_log = data_preprocessing.Training.create_split_log(
                 processed_log, validation_ratio=args.validation_split
             )
 
@@ -602,7 +650,20 @@ def main(args, dt_object):
             myfile.write(
                 "datetime"
                 ",epoch"
-                ",training_loss_activity,training_loss_time,training_loss,validation_loss_activity,validation_loss_time,validation_loss,elapsed_seconds\n"
+                ",training_loss_activity"
+                ",training_loss_time"
+                ",training_loss"
+                ",validation_loss_activity"
+                ",validation_loss_time"
+                ",validation_loss"
+                ",elapsed_seconds"
+                ",validation_loss_fix_masks_activity"
+                ",validation_loss_fix_masks_time"
+                ",validation_loss_fix_masks"
+                ",training_accuracy"
+                ",validation_accuracy"
+                ",training_mse"
+                ",validation_mse\n"
             )
 
         # not saving all version of model:
@@ -629,7 +690,7 @@ def main(args, dt_object):
             model[1].train()
             dt_object_training_start = datetime.datetime.now()
 
-            training_loss = iterate_over_prefixes(
+            training_loss_activity, training_loss_time, training_accuracy, training_mse = iterate_over_prefixes(
                 log_with_prefixes=log_with_prefixes,
                 batch_size=args.training_batch_size,
                 model=model,
@@ -654,7 +715,12 @@ def main(args, dt_object):
             model[0].eval()
             model[1].eval()
             with torch.no_grad():
-                validation_loss = iterate_over_prefixes(
+                (
+                validation_loss_activity,
+                validation_loss_time,
+                validation_accuracy,
+                validation_mse,
+            ) = iterate_over_prefixes(
                     log_with_prefixes=log_with_prefixes,
                     batch_size=args.validation_batch_size,
                     model=model,
@@ -669,9 +735,9 @@ def main(args, dt_object):
             validation_loss_fix_masks = (99, 99)
             total_validation_loss_fix_masks = 99
 
-            if len(validation_loss) > 1:
+            if isinstance(validation_loss_time, float):  # If time predictions exist
                 total_validation_loss = (
-                    validation_loss[0] + args.lagrange_a * validation_loss[1]
+                    validation_loss_activity + args.lagrange_a * validation_loss_time
                 )
                 with open(os.path.join(path, training_log_filename), "a") as myfile:
                     myfile.write(
@@ -679,17 +745,17 @@ def main(args, dt_object):
                         + ","
                         + str(e)
                         + ","
-                        + "{:.4f}".format(training_loss[0])
+                        + "{:.4f}".format(training_loss_activity)
                         + ","
-                        + "{:.4f}".format(training_loss[1])
+                        + "{:.4f}".format(training_loss_time)
                         + ","
                         + "{:.4f}".format(
-                            training_loss[0] + args.lagrange_a * training_loss[1]
+                            training_loss_activity + args.lagrange_a * training_loss_time
                         )
                         + ","
-                        + "{:.4f}".format(validation_loss[0])
+                        + "{:.4f}".format(validation_loss_activity)
                         + ","
-                        + "{:.4f}".format(validation_loss[1])
+                        + "{:.4f}".format(validation_loss_time)
                         + ","
                         + "{:.4f}".format(total_validation_loss)
                         + ","
@@ -700,23 +766,31 @@ def main(args, dt_object):
                         + "{:.4f}".format(validation_loss_fix_masks[1])
                         + ","
                         + "{:.4f}".format(total_validation_loss_fix_masks)
+                        + ","
+                        + "{:.4f}".format(training_accuracy)
+                        + ","
+                        + "{:.4f}".format(validation_accuracy)
+                        + ","
+                        + "{:.4f}".format(training_mse)
+                        + ","
+                        + "{:.4f}".format(validation_mse)
                         + "\n"
                     )
             else:
-                total_validation_loss = validation_loss[0]
+                total_validation_loss = validation_loss_activity
                 with open(os.path.join(path, training_log_filename), "a") as myfile:
                     myfile.write(
                         dt_object.strftime("%Y%m%d%H%M")
                         + ","
                         + str(e)
                         + ","
-                        + "{:.4f}".format(training_loss[0])
+                        + "{:.4f}".format(training_loss_activity)
                         + ","
                         + "NA"
                         + ","
-                        + "{:.4f}".format(training_loss[0])
+                        + "{:.4f}".format(training_loss_activity)
                         + ","
-                        + "{:.4f}".format(validation_loss[0])
+                        + "{:.4f}".format(validation_loss_activity)
                         + ","
                         + "NA"
                         + ","
@@ -729,6 +803,14 @@ def main(args, dt_object):
                         + "{:.4f}".format(validation_loss_fix_masks[1])
                         + ","
                         + "{:.4f}".format(total_validation_loss_fix_masks)
+                        + ","
+                        + "{:.4f}".format(training_accuracy)
+                        + ","
+                        + "{:.4f}".format(validation_accuracy)
+                        + ","
+                        + "NA"
+                        + ","
+                        + "NA"
                         + "\n"
                     )
 
@@ -847,7 +929,7 @@ if __name__ == "__main__":
         default=False,
         type=bool,
     )
-    parser.add_argument("--device", help="GPU or CPU", default="GPU", type=str)
+    parser.add_argument("--device", help="GPU or CPU", default="CPU", type=str)
     parser.add_argument(
         "--lagrange_a", help="Langrange multiplier a", default=1.0, type=float
     )
