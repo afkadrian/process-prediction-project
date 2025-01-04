@@ -133,3 +133,67 @@ class SequentialDecoder(nn.Module):
             return self.readout(self.cell(self.value_embedding(x), init_hidden)[0])
         else:
             return self.readout(self.cell(self.value_embedding(x))[0])
+
+class SequentialAutoEncoder(nn.Module):
+    # TODO implement SequentialDecoder.Readout.weights = SequentialDecoder.Embedding.weights = SequentialEncoder.Embedding.weights
+    def __init__(self,
+                 hidden_size,
+                 num_layers,
+                 dropout_prob,
+                 vocab_size,
+                 attributes_meta,
+                 time_attribute_concatenated,
+                 pad_token,
+                 nb_special_tokens):
+        super().__init__()
+
+        self.encoder = SequentialEncoder(hidden_size,
+                                         num_layers,
+                                         dropout_prob,
+                                         vocab_size,
+                                         attributes_meta,
+                                         time_attribute_concatenated,
+                                         pad_token,
+                                         nb_special_tokens)
+        self.decoder = SequentialDecoder(hidden_size,
+                                         num_layers,
+                                         dropout_prob,vocab_size,
+                                         attributes_meta,
+                                         time_attribute_concatenated,
+                                         pad_token,
+                                         nb_special_tokens)
+
+    def forward(self, prefix, suffix):
+        # During training it is teacher forcing / supervised learning / closed loop
+        # During inference it is open loop
+        return self.decoder(suffix, self.encoder(prefix)[1])
+    
+class SequentialEncoder(nn.Module):
+    def __init__(self,
+                 hidden_size,
+                 num_layers,
+                 dropout_prob,
+                 vocab_size,
+                 attributes_meta,
+                 time_attribute_concatenated,
+                 pad_token,
+                 nb_special_tokens):
+        super().__init__()
+
+        self.vocab_size = vocab_size + nb_special_tokens
+
+        self.value_embedding = Embedding(d_model=hidden_size,
+                                         vocab_size=self.vocab_size,
+                                         dropout_prob=dropout_prob,
+                                         attributes_meta=attributes_meta,
+                                         time_attribute_concatenated=time_attribute_concatenated,
+                                         pad_token=pad_token)
+
+        self.cell = nn.LSTM(input_size=hidden_size,
+                            hidden_size=hidden_size,
+                            num_layers=num_layers,
+                            batch_first=True,
+                            dropout=dropout_prob)
+
+    def forward(self, x):
+        return self.cell(self.value_embedding(x))
