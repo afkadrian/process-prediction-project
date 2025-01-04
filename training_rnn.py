@@ -31,6 +31,9 @@ def iterate_over_prefixes(
     summa_categorical_loss = 0.0
     summa_regression_loss = 0.0
     steps = 0
+    correct_predictions = 0
+    total_predictions = 0
+    time_mse_sum = 0.0
 
     if not to_wrap_into_torch_dataset:
         for prefix in log_with_prefixes[subset + "_prefixes_and_suffixes"][
@@ -104,19 +107,30 @@ def iterate_over_prefixes(
 
                 prediction = model((activities_prefixes_batch, times_prefixes_batch))
 
+                # Calculate accuracy for activities
+                _, predicted = torch.max(prediction[0][:, -1, :], 1)
+                total_predictions += activities_suffixes_target_batch.size(0)
+                correct_predictions += (
+                    (predicted == activities_suffixes_target_batch).sum().item()
+                )
+
                 categorical_criterion.reduction = "mean"
-                # Only the last position
                 categorical_loss = categorical_criterion(
                     prediction[0][:, -1, :], activities_suffixes_target_batch
                 )
 
-                # If time attribute and time prediction present:
                 if len(prediction) > 1:
                     regression_criterion.reduction = "mean"
-                    # Only the last position
                     regression_loss = regression_criterion(
                         prediction[1][:, -1, :], times_suffixes_target_batch
                     )
+
+                    # Calculate MSE for time predictions
+                    time_pred = prediction[1][:, -1, :]
+                    time_mse = torch.mean(
+                        (time_pred - times_suffixes_target_batch) ** 2
+                    ).item()
+                    time_mse_sum += time_mse
 
                     if subset == "training":
                         (categorical_loss + lagrange_a * regression_loss).backward()
@@ -134,13 +148,19 @@ def iterate_over_prefixes(
                 if subset == "training":
                     optimizer.step()
 
+        accuracy = correct_predictions / total_predictions
+        avg_time_mse = time_mse_sum / steps if steps > 0 else 0.0
+
         if len(prediction) > 1:
             return (
                 summa_categorical_loss.item() / steps,
                 summa_regression_loss.item() / steps,
+                accuracy,
+                avg_time_mse,
             )
         else:
-            return (summa_categorical_loss.item() / steps,)
+            return (summa_categorical_loss.item() / steps, accuracy)
+
     else:
         if subset == "training":
             prefixes = list(log_with_prefixes[subset + "_torch_data_loaders"].keys())
@@ -167,19 +187,26 @@ def iterate_over_prefixes(
 
                 prediction = model(x=(a_p, t_p))
 
+                # Calculate accuracy for activities
+                _, predicted = torch.max(prediction[0][:, -1, :], 1)
+                total_predictions += a_s_t.size(0)
+                correct_predictions += (predicted == a_s_t.squeeze(-1)).sum().item()
+
                 categorical_criterion.reduction = "mean"
-                # Only the last position
                 categorical_loss = categorical_criterion(
                     prediction[0][:, -1, :], a_s_t.squeeze(-1)
                 )
 
-                # If time attribute and time prediction present:
                 if len(prediction) > 1:
                     regression_criterion.reduction = "mean"
-                    # Only the last position
                     regression_loss = regression_criterion(
                         prediction[1][:, -1, :], t_s_t.squeeze(-1)
                     )
+
+                    # Calculate MSE for time predictions
+                    time_pred = prediction[1][:, -1, :]
+                    time_mse = torch.mean((time_pred - t_s_t.squeeze(-1)) ** 2).item()
+                    time_mse_sum += time_mse
 
                     if subset == "training":
                         (categorical_loss + lagrange_a * regression_loss).backward()
@@ -197,13 +224,18 @@ def iterate_over_prefixes(
                 if subset == "training":
                     optimizer.step()
 
+        accuracy = correct_predictions / total_predictions
+        avg_time_mse = time_mse_sum / steps if steps > 0 else 0.0
+
         if len(prediction) > 1:
             return (
                 summa_categorical_loss.item() / steps,
                 summa_regression_loss.item() / steps,
+                accuracy,
+                avg_time_mse,
             )
         else:
-            return (summa_categorical_loss.item() / steps,)
+            return (summa_categorical_loss.item() / steps, accuracy)
 
 
 def train_rnn(args, log, log_name, dt_object):
@@ -310,7 +342,14 @@ def train_rnn(args, log, log_name, dt_object):
             ",validation_loss_activity"
             ",validation_loss_time"
             ",validation_loss"
-            ",elapsed_seconds\n"
+            ",elapsed_seconds"
+            ",validation_loss_fix_masks_activity"
+            ",validation_loss_fix_masks_time"
+            ",validation_loss_fix_masks"
+            ",training_accuracy"
+            ",validation_accuracy"
+            ",training_mse"
+            ",validation_mse\n"
         )
 
     # not saving all version of model:
@@ -336,7 +375,7 @@ def train_rnn(args, log, log_name, dt_object):
         model.train()
         dt_object_training_start = datetime.datetime.now()
 
-        training_loss = iterate_over_prefixes(
+        training_loss_activity, training_loss_time, training_accuracy, training_mse  = iterate_over_prefixes(
             log_with_prefixes=log_with_prefixes,
             batch_size=args.training_batch_size,
             model=model,
@@ -357,7 +396,7 @@ def train_rnn(args, log, log_name, dt_object):
 
         model.eval()
         with torch.no_grad():
-            validation_loss = iterate_over_prefixes(
+            validation_loss_activity, validation_loss_time, validation_accuracy, validation_mse = iterate_over_prefixes(
                 log_with_prefixes=log_with_prefixes,
                 batch_size=args.validation_batch_size,
                 model=model,
@@ -372,27 +411,23 @@ def train_rnn(args, log, log_name, dt_object):
         validation_loss_fix_masks = (99, 99)
         total_validation_loss_fix_masks = 99
 
-        if len(validation_loss) > 1:
-            total_validation_loss = (
-                validation_loss[0] + args.lagrange_a * validation_loss[1]
-            )
+        if isinstance(validation_loss_time, float):  # If time predictions exist
+            total_validation_loss = validation_loss_activity + args.lagrange_a * validation_loss_time
             with open(os.path.join(path, training_log_filename), "a") as myfile:
                 myfile.write(
                     dt_object.strftime("%Y%m%d%H%M")
                     + ","
                     + str(e)
                     + ","
-                    + "{:.4f}".format(training_loss[0])
+                    + "{:.4f}".format(training_loss_activity)
                     + ","
-                    + "{:.4f}".format(training_loss[1])
+                    + "{:.4f}".format(training_loss_time)
                     + ","
-                    + "{:.4f}".format(
-                        training_loss[0] + args.lagrange_a * training_loss[1]
-                    )
+                    + "{:.4f}".format(training_loss_activity + args.lagrange_a * training_loss_time)
                     + ","
-                    + "{:.4f}".format(validation_loss[0])
+                    + "{:.4f}".format(validation_loss_activity)
                     + ","
-                    + "{:.4f}".format(validation_loss[1])
+                    + "{:.4f}".format(validation_loss_time)
                     + ","
                     + "{:.4f}".format(total_validation_loss)
                     + ","
@@ -403,23 +438,31 @@ def train_rnn(args, log, log_name, dt_object):
                     + "{:.4f}".format(validation_loss_fix_masks[1])
                     + ","
                     + "{:.4f}".format(total_validation_loss_fix_masks)
+                    + ","
+                    + "{:.4f}".format(training_accuracy)
+                    + ","
+                    + "{:.4f}".format(validation_accuracy)
+                    + ","
+                    + "{:.4f}".format(training_mse)
+                    + ","
+                    + "{:.4f}".format(validation_mse)
                     + "\n"
                 )
         else:
-            total_validation_loss = validation_loss[0]
+            total_validation_loss = validation_loss_activity
             with open(os.path.join(path, training_log_filename), "a") as myfile:
                 myfile.write(
                     dt_object.strftime("%Y%m%d%H%M")
                     + ","
                     + str(e)
                     + ","
-                    + "{:.4f}".format(training_loss[0])
+                    + "{:.4f}".format(training_loss_activity)
                     + ","
                     + "NA"
                     + ","
-                    + "{:.4f}".format(training_loss[0])
+                    + "{:.4f}".format(training_loss_activity)
                     + ","
-                    + "{:.4f}".format(validation_loss[0])
+                    + "{:.4f}".format(validation_loss_activity)
                     + ","
                     + "NA"
                     + ","
@@ -432,6 +475,14 @@ def train_rnn(args, log, log_name, dt_object):
                     + "{:.4f}".format(validation_loss_fix_masks[1])
                     + ","
                     + "{:.4f}".format(total_validation_loss_fix_masks)
+                    + ","
+                    + "{:.4f}".format(training_accuracy)
+                    + ","
+                    + "{:.4f}".format(validation_accuracy)
+                    + ","
+                    + "NA"
+                    + ","
+                    + "NA"
                     + "\n"
                 )
 
